@@ -1,0 +1,172 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# NYPD Shooting Incident
+
+This report utilizes shooting incident data from the New York City Police Department (NYPD) from 2006 to 2022. I look at the data by the time of day and time of year to explore patterns in the gun violence that occurs in New York City. More information on the original data set is available here: <https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic>.
+
+```{r libraries, results = "hide", message = FALSE, warning = FALSE}
+library(tidyverse)
+library(lubridate)
+library(modelr)
+```
+
+## Import Data
+To begin, I import the data set as a CSV directly from the website and assign it to the *incident* data frame.
+
+```{r get_data}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+```
+
+```{r import_data}
+incident <- read_csv(url, show_col_types = FALSE)
+```
+
+## Data Cleaning
+This data set is already in a tidy form with an observation defined as a single shooting incident that occurred in New York City. I remove any columns from the data that will be unnecessary for this analysis, most of which are related to location. Since I don't plan on mapping, I remove the latitude and longitude values, and I also remove the occurrence location and description fields since they are *NA* for most of the observations.
+
+To prepare for my planned analysis, I change a few of the columns' data types to be more accurate. The date column is changed from a *character* data type to a proper *date* format (time is already formatted correctly). I also mutate the fields concerning perpetrator and victim information to be factors, and I make sure that the age factor's levels are ordered properly for my later analysis. 
+
+```{r tidy_data}
+#Remove columns and change data types and names where necessary
+incident <- incident %>%
+  select(INCIDENT_KEY:VIC_RACE) %>%
+  select(-c(BORO, PRECINCT, JURISDICTION_CODE, LOC_OF_OCCUR_DESC,
+            LOC_CLASSFCTN_DESC, LOCATION_DESC)) %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  rename_at('STATISTICAL_MURDER_FLAG', ~'STAT_MURDER')
+
+#Convert perpetrator and victim age fields to factors
+age_levels <- c('<18','18-24','25-44','45-64','65+','UNKNOWN')
+incident <- incident %>%
+  mutate(PERP_AGE_GROUP = factor(PERP_AGE_GROUP, levels = age_levels)) %>%
+  mutate(VIC_AGE_GROUP = factor(VIC_AGE_GROUP, levels = age_levels))
+
+#Convert perpetrator and victim sex fields to factors
+sex_levels <- c('M','F','U')
+incident <- incident %>%
+  mutate(PERP_SEX = factor(PERP_SEX, levels = sex_levels)) %>%
+  mutate(VIC_SEX = factor(VIC_SEX, levels = sex_levels))
+
+#Convert perpetrator and victim race fields to factors
+race_levels <- c('AMERICAN INDIAN/ALASKAN NATIVE','ASIAN / PACIFIC ISLANDER',
+                 'BLACK','BLACK HISPANIC','WHITE','WHITE HISPANIC','UNKNOWN')
+incident <- incident %>%
+  mutate(PERP_RACE = factor(PERP_RACE, levels = race_levels)) %>%
+  mutate(VIC_RACE = factor(VIC_RACE, levels = race_levels))
+
+#Show summary of data after changes
+summary(incident)
+```
+
+## Data Analysis
+
+For my analysis, I want to explore some potential patterns in when shooting incidents are most likely to happen, both with regard to time of day and time of year. I begin by looking at the time of day that incidents have occurred over the past 17 years of data. I group the data by the hour that the incidents occurred and plot it below.
+
+```{r incident_by_time}
+#Group the incidents by the time of day that they occurred
+incident_by_time <- incident %>%
+  group_by(hour(OCCUR_TIME)) %>%
+  count() %>%
+  rename_at('hour(OCCUR_TIME)', ~'HOUR') %>% 
+  rename_at('n', ~'Incidents')
+
+#Graph incidents by time of day
+incident_by_time %>%
+  ggplot(aes(x = HOUR, y = Incidents)) +
+  geom_point(aes(color = "Incidents")) +
+  geom_smooth(aes(color = "Incidents", fill = "Incidents")) +
+  labs(title = "Shooting Incidents by Time of Day", x = "Hour of Day",
+       y = "Incidents", color = "", fill = "")
+```
+
+It seems intuitive that more violent crimes probably happen in the evening than in the early hours of the morning given that more people are typically awake and active later in the day. I do find it surprising just how big the difference in the number of crimes throughout the day is in this data set, and I also would have thought that the minimum number of incidents would have occurred earlier in the morning than between 7 and 9 a.m.
+
+Next, I look at the number of incidents at different times throughout the year by grouping the data by week. I also remove week 53, as that week only contains one day a year (or two days in a leap year) and throws the scale of the graph off because of its small magnitude. 
+
+```{r incident_by_week}
+#Group the incidents by the week in the year that they occurred and remove week 53
+incident_by_week <- incident %>%
+  group_by(week(OCCUR_DATE)) %>%
+  count() %>%
+  rename_at('week(OCCUR_DATE)', ~'Week') %>% 
+  rename_at('n', ~'Incidents') %>%
+  filter(Week < 53)
+
+#Graph incidents by week
+incident_by_week %>%
+  ggplot(aes(x = Week, y = Incidents)) +
+  geom_point(aes(color = "Incidents")) +
+  geom_smooth(aes(color = "Incidents", fill = "Incidents")) +
+  labs(title = "Shooting Incidents by Week", x = "Week in Year",
+       y = "Incidents", color ="", fill = "")
+```
+
+Like with the time of day graph, I am surprised at just how big the difference in incidents is depending on the time of the year. It makes sense that more crimes could happen in the summer if more people were active outside in the city, but I wouldn't have thought that there would be around double the crimes in the middle of summer compared to the middle of winter. 
+
+However, a potential complication with this analysis is that these graphs are made by aggregating 17 years of data even though each year might not have a similar trend. So, I decide to take a step back to see if there are any trends in the annual data.
+
+```{r incident_by_year}
+#Group the incidents by the year that they occurred
+incident_by_year <- incident %>%
+  group_by(year(OCCUR_DATE)) %>%
+  count() %>%
+  rename_at('year(OCCUR_DATE)', ~'Year') %>% 
+  rename_at('n', ~'Incidents')
+
+#Graph incidents by year
+incident_by_year %>%
+  ggplot(aes(x = Year, y = Incidents)) +
+  geom_line(aes(color = "Incidents")) +
+  geom_point(aes(color = "Incidents")) +
+  stat_smooth(method = "lm", se = FALSE) +
+  labs(title = "Annual Shooting Incidents", x = "Year",
+       y = "Incidents", color = "")
+```
+
+From this chart it is clear that there was a relatively sharp decrease in the number of shooting incidents from 2006 to 2019 followed by a jump back to earlier levels in 2020. This seems slightly counterintuitive since the time of day of incidents suggests that there are more crimes when more people are out and about, so with COVID-19 lockdowns in 2020 and 2021, I wouldn't expect to see such a large jump. This raises questions about if there is an underlying reporting or methodology change that could have caused the jump after years of decline, or if something else is responsible.
+
+The linear model line of best fit on the chart above clearly doesn't represent the trend in the data very well. However, I want to confirm that the years prior to 2020 did have a relatively linear decline. I filter the data set to the first 14 year and create a linear model with year as the independent variable and the number of incidents as the dependent variable.
+
+```{r year_lm}
+#Filter to years prior to 2020
+incident_by_year_filt <- incident_by_year %>%
+  filter(Year < 2020)
+
+#Create linear model of incidents by year
+year_model <- lm(Incidents ~ Year, data = incident_by_year_filt)
+summary(year_model)
+```
+
+From the results, there is a clear correlation between the two variables for these years in particular. Because the independent variable is just the year, it likely isn't the reason for the decline in shooting incidents. However, with an adjusted $R^2$ value of 0.89, this model confirms that the decrease in shootings was largely linear and was dropping by around 92 incidents per year. This finding also shows that in future, more complex models with this data set, a person may want to consider using a fixed effects model to account for the inherent differences between years. The plot below shows the incidents per year in red with the linear model's predictions in blue.
+
+```{r year_lm_plot}
+#Graph incidents by year with the model predictions
+incident_by_year_filt %>%
+  ggplot(aes(x = Year, y = Incidents)) +
+  geom_line(aes(color = "Incidents")) +
+  geom_point(aes(color = "Incidents")) +
+  stat_smooth(method = "lm", se = FALSE) +
+  labs(title = "Annual Shooting Incidents Prior to 2020", x = "Year",
+       y = "Incidents", color = "")
+```
+
+## Conclusion
+
+Throughout this project, I explore different aspects of New York City shooting incidents over the past 17 years. I identify some interesting trends about when attacks are more likely to occur. From this data, it appears that the number of shooting incidents in the city can vary greatly depending on the time of day and time of year it is. Additionally, when looking at the data on the annual basis, it is clear the data had a downward linear trend from 2006 to 2019 before spiking back up to higher levels in recent years. This relationship could be cause to explore the metadata further to understand if it was a change in reporting or methodology that caused the sudden jump.
+
+This analysis also raises more questions for further exploration, such as what could be the driving factor for these potential relationships? Or, are these trends caused by some completely unrelated factor that I did not consider here? It would also be interesting to conduct further analysis on shooting incidents compared to other crimes in New York City to see if the recent jump in shootings is reflected in other types of incidents.
+
+I do have preexisting opinions about how law enforcement tactics, especially proactive policing and targeting neighborhoods with high crime rates, can affect marginalized communities that already have a poor relationship with the police. Because of these biases, I try to avoid looking at topics in the data that I feel strongly about, such as race. The data itself could be biased anyway on these topics due to potential bias in the police system in general. Instead, I focus in this analysis on more neutral topics like time. There is also a potential ethical issue in my choice to remove some years of data to fit a model. However, I only used this model to see if there was a trend before the unexplained jump in data, not to make any claims about causation.
+
+## Session Info
+```{r session_info, echo = FALSE}
+sessionInfo()
+```
